@@ -52,6 +52,11 @@ module lint_module;
 static int lint_engine = TRUE;
 static pool *lint_pool = NULL;
 
+struct lint_buffered_line {
+  const char *text;
+  size_t textsz;
+};
+
 struct lint_parsed_line {
   struct lint_parsed_line *next, *prev;
   const char *directive;
@@ -64,7 +69,7 @@ static xaset_t *parsed_lines = NULL;
 
 static const char *trace_channel = "lint";
 
-static int lint_write_config_set(pool *p, pr_fh_t *fh, xaset_t *set,
+static int lint_add_config_set(pool *p, array_header *bl, xaset_t *set,
   char *indent);
 
 /* XXX TODO:
@@ -141,6 +146,73 @@ static int lint_write_fmt(pr_fh_t *fh, const char *fmt, ...) {
   return res;
 }
 
+static int lint_add_msg(pool *p, array_header *buffered_lines,
+    const char *fmt, va_list msg) {
+  char buf[LINT_BUFFER_SIZE];
+  size_t buflen;
+  struct lint_buffered_line *bl;
+
+  buflen = pr_vsnprintf(buf, sizeof(buf)-1, fmt, msg);
+
+  /* Always make sure the buffer is NUL-terminated. */
+  buf[sizeof(buf)-1] = '\0';
+
+  bl = pcalloc(p, sizeof(struct lint_buffered_line));
+  bl->text = pstrdup(p, buf);
+  bl->textsz = buflen;
+
+  *((struct lint_buffered_line **) push_array(buffered_lines)) = bl;
+  return 0;
+}
+
+static int lint_add_fmt(pool *p, array_header *buffered_lines,
+    const char *fmt, ...) {
+  int res, xerrno;
+  va_list msg;
+
+  va_start(msg, fmt);
+  res = lint_add_msg(p, buffered_lines, fmt, msg);
+  xerrno = errno;
+  va_end(msg);
+
+  errno = xerrno;
+  return res;
+}
+
+static int buffered_linecmp(const void *a, const void *b) {
+  const struct lint_buffered_line *bla, *blb;
+
+  bla = *((struct lint_buffered_line **) a);
+  blb = *((struct lint_buffered_line **) b);
+  return strcmp(bla->text, blb->text);
+}
+
+static int lint_write_buffered_lines(pr_fh_t *fh,
+    array_header *buffered_lines) {
+  register unsigned int i;
+
+  if (buffered_lines == NULL) {
+    return 0;
+  }
+
+  /* Sort the lines first */
+  qsort((void *) buffered_lines->elts, buffered_lines->nelts,
+    sizeof(struct lint_buffered_line *), buffered_linecmp);
+
+  for (i = 0; i < buffered_lines->nelts; i++) {
+    int res;
+    struct lint_buffered_line *bl;
+
+    bl = ((struct lint_buffered_line **) buffered_lines->elts)[i];
+    res = lint_write_text(fh, bl->text, bl->textsz);
+    if (res < 0) {
+      return -1;
+    }
+  }
+
+  return 0;
+}
+
 static int lint_write_header(pool *p, pr_fh_t *fh) {
   int res;
   pool *tmp_pool;
@@ -190,8 +262,8 @@ static int is_static_module(module *m) {
 }
 #endif /* PR_SHARED_MODULE */
 
-static int lint_write_config_rec(pool *p, pr_fh_t *fh, config_rec *c,
-    const char *indent) {
+static int lint_add_config_rec(pool *p, array_header *buffered_lines,
+    config_rec *c, const char *indent) {
   int res = 0;
   struct lint_parsed_line *parsed_line;
 
@@ -233,7 +305,8 @@ static int lint_write_config_rec(pool *p, pr_fh_t *fh, config_rec *c,
 
       parsed_line = lint_find_parsed_line(directive);
       if (parsed_line != NULL) {
-        res = lint_write_fmt(fh, "%s%s\n", indent, parsed_line->text);
+        res = lint_add_fmt(p, buffered_lines, "%s%s\n", indent,
+          parsed_line->text);
 
       } else {
         pr_trace_msg(trace_channel, 1, "found no matching parsed line for %s",
@@ -258,8 +331,8 @@ static int lint_write_config_rec(pool *p, pr_fh_t *fh, config_rec *c,
   return res;
 }
 
-static int lint_write_config_set(pool *p, pr_fh_t *fh, xaset_t *set,
-    char *indent) {
+static int lint_add_config_set(pool *p, array_header *buffered_lines,
+    xaset_t *set, char *indent) {
   int res;
   config_rec *c;
 
@@ -274,7 +347,7 @@ static int lint_write_config_set(pool *p, pr_fh_t *fh, xaset_t *set,
   for (c = (config_rec *) set->xas_list; c; c = c->next) {
     pr_signals_handle();
 
-    res = lint_write_config_rec(p, fh, c, indent);
+    res = lint_add_config_rec(p, buffered_lines, c, indent);
     if (res < 0) {
       return -1;
     }
@@ -283,7 +356,7 @@ static int lint_write_config_set(pool *p, pr_fh_t *fh, xaset_t *set,
       pool *iter_pool;
 
       iter_pool = make_sub_pool(p);
-      res = lint_write_config_set(p, fh, c->subset,
+      res = lint_add_config_set(p, buffered_lines, c->subset,
         pstrcat(iter_pool, indent, "  ", NULL));
       destroy_pool(iter_pool);
 
@@ -296,7 +369,8 @@ static int lint_write_config_set(pool *p, pr_fh_t *fh, xaset_t *set,
   return 0;
 }
 
-static int lint_write_server_rec(pool *p, pr_fh_t *fh, server_rec *s) {
+static int lint_add_server_rec(pool *p, array_header *buffered_lines,
+    server_rec *s) {
   int res;
 
   if (s->conf == NULL ||
@@ -304,7 +378,7 @@ static int lint_write_server_rec(pool *p, pr_fh_t *fh, server_rec *s) {
     return 0;
   }
 
-  res = lint_write_config_set(p, fh, s->conf, NULL);
+  res = lint_add_config_set(p, buffered_lines, s->conf, NULL);
   if (res < 0) {
     return -1;
   }
@@ -347,135 +421,180 @@ static int lint_write_modules(pool *p, pr_fh_t *fh) {
   return 0;
 }
 
-/* write "server config" context
- *   config_recs
- */
 static int lint_write_server_config(pool *p, pr_fh_t *fh) {
   int res;
+  pool *ctx_pool;
   struct lint_parsed_line *parsed_line;
+  array_header *buffered_lines;
 
-  res = lint_write_fmt(fh, "\n# Server Config\n\nDefaultAddress %s\n",
+  res = lint_write_fmt(fh, "%s", "\n# Server Config\n\n");
+  if (res < 0) {
+    return -1;
+  }
+
+  /* Store our lines in a buffer for sorting, for emitting normalized
+   * configs.
+   */
+  ctx_pool = make_sub_pool(p);
+  pr_pool_tag(ctx_pool, "Lint server context pool");
+  buffered_lines = make_array(ctx_pool, 10,
+    sizeof(struct lint_buffered_line *));
+
+  res = lint_add_fmt(ctx_pool, buffered_lines, "DefaultAddress %s\n",
     main_server->ServerAddress);
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
   /* MaxConnectionRate changes variables that are scoped to mod_core only. */
   parsed_line = lint_find_parsed_line("MaxConnectionRate");
   if (parsed_line != NULL) {
-    res = lint_write_fmt(fh, "%s\n", parsed_line->text);
+    res = lint_add_fmt(ctx_pool, buffered_lines, "%s\n", parsed_line->text);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
   if (ServerMaxInstances > 0) {
-    res = lint_write_fmt(fh, "MaxInstances %lu\n", ServerMaxInstances);
+    res = lint_add_fmt(ctx_pool, buffered_lines, "MaxInstances %lu\n",
+      ServerMaxInstances);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
-  res = lint_write_fmt(fh, "PidFile %s\n", pr_pidfile_get());
+  res = lint_add_fmt(ctx_pool, buffered_lines, "PidFile %s\n",
+    pr_pidfile_get());
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
-  res = lint_write_fmt(fh, "Port %u\n", main_server->ServerPort);
+  res = lint_add_fmt(ctx_pool, buffered_lines, "Port %u\n",
+    main_server->ServerPort);
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
-  res = lint_write_fmt(fh, "ScoreboardFile %s\n", pr_get_scoreboard());
+  res = lint_add_fmt(ctx_pool, buffered_lines, "ScoreboardFile %s\n",
+    pr_get_scoreboard());
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
-  res = lint_write_fmt(fh, "ScoreboardMutex %s\n", pr_get_scoreboard_mutex());
+  res = lint_add_fmt(ctx_pool, buffered_lines, "ScoreboardMutex %s\n",
+    pr_get_scoreboard_mutex());
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
   if (main_server->ServerAdmin != NULL) {
-    res = lint_write_fmt(fh, "ServerAdmin \"%s\"\n", main_server->ServerAdmin);
+    res = lint_add_fmt(ctx_pool, buffered_lines, "ServerAdmin \"%s\"\n",
+      main_server->ServerAdmin);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
   if (main_server->ServerName != NULL) {
-    res = lint_write_fmt(fh, "ServerName \"%s\"\n", main_server->ServerName);
+    res = lint_add_fmt(ctx_pool, buffered_lines, "ServerName \"%s\"\n",
+      main_server->ServerName);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
-  res = lint_write_fmt(fh, "ServerType %s\n",
+  res = lint_add_fmt(ctx_pool, buffered_lines, "ServerType %s\n",
     ServerType == SERVER_STANDALONE ? "standalone" : "inetd");
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
-  res = lint_write_fmt(fh, "SocketBindTight %s\n",
+  res = lint_add_fmt(ctx_pool, buffered_lines, "SocketBindTight %s\n",
     SocketBindTight ? "on" : "off");
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
   parsed_line = lint_find_parsed_line("SocketOptions");
   if (parsed_line != NULL) {
-    res = lint_write_fmt(fh, "%s\n", parsed_line->text);
+    res = lint_add_fmt(ctx_pool, buffered_lines, "%s\n", parsed_line->text);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
-  res = lint_write_fmt(fh, "TCPBacklog %d\n", tcpBackLog);
+  res = lint_add_fmt(ctx_pool, buffered_lines, "TCPBacklog %d\n", tcpBackLog);
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
   parsed_line = lint_find_parsed_line("TraceLog");
   if (parsed_line != NULL) {
-    res = lint_write_fmt(fh, "%s\n", parsed_line->text);
+    res = lint_add_fmt(ctx_pool, buffered_lines, "%s\n", parsed_line->text);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
   parsed_line = lint_find_parsed_line("Trace");
   if (parsed_line != NULL) {
-    res = lint_write_fmt(fh, "%s\n", parsed_line->text);
+    res = lint_add_fmt(ctx_pool, buffered_lines, "%s\n", parsed_line->text);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
   parsed_line = lint_find_parsed_line("TraceOptions");
   if (parsed_line != NULL) {
-    res = lint_write_fmt(fh, "%s\n", parsed_line->text);
+    res = lint_add_fmt(ctx_pool, buffered_lines, "%s\n", parsed_line->text);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
-  res = lint_write_fmt(fh, "UseIPv6 %s\n",
+  res = lint_add_fmt(ctx_pool, buffered_lines, "UseIPv6 %s\n",
     pr_netaddr_use_ipv6() ? "on" : "off");
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
-  res = lint_write_fmt(fh, "UseReverseDNS %s\n",
+  res = lint_add_fmt(ctx_pool, buffered_lines, "UseReverseDNS %s\n",
     ServerUseReverseDNS ? "on" : "off");
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
-  res = lint_write_server_rec(p, fh, main_server);
+  res = lint_add_server_rec(ctx_pool, buffered_lines, main_server);
   if (res < 0) {
+    destroy_pool(ctx_pool);
     return -1;
   }
 
+  res = lint_write_buffered_lines(fh, buffered_lines);
+  if (res < 0) {
+    destroy_pool(ctx_pool);
+    return -1;
+  }
+
+  destroy_pool(ctx_pool);
   return 0;
 }
 
@@ -558,12 +677,19 @@ static int lint_write_ctrls(pool *p, pr_fh_t *fh) {
 
 static int lint_write_vhosts(pool *p, pr_fh_t *fh) {
   int res;
+  pool *ctx_pool;
   server_rec *s;
+  array_header *buffered_lines;
 
   res = lint_write_fmt(fh, "%s", "\n# VirtualHosts\n");
   if (res < 0) {
     return -1;
   }
+
+  ctx_pool = make_sub_pool(p);
+  pr_pool_tag(ctx_pool, "Lint <VirtualHost> context pool");
+  buffered_lines = make_array(ctx_pool, 10,
+    sizeof(struct lint_buffered_line *));
 
   for (s = (server_rec *) server_list->xas_list; s; s = s->next) {
     pr_signals_handle();
@@ -573,12 +699,20 @@ static int lint_write_vhosts(pool *p, pr_fh_t *fh) {
       continue;
     }
 
-    res = lint_write_server_rec(p, fh, s);
+    res = lint_add_server_rec(ctx_pool, buffered_lines, s);
     if (res < 0) {
+      destroy_pool(ctx_pool);
       return -1;
     }
   }
 
+  res = lint_write_buffered_lines(fh, buffered_lines);
+  if (res < 0) {
+    destroy_pool(ctx_pool);
+    return -1;
+  }
+
+  destroy_pool(ctx_pool);
   return 0;
 }
 
@@ -805,6 +939,7 @@ static void lint_restart_ev(const void *event_data, void *user_data) {
    */
   pr_event_register(&lint_module, "core.parsed-line", lint_parsed_line_ev,
     NULL);
+  lint_engine = TRUE;
 }
 
 /* Initialization functions
