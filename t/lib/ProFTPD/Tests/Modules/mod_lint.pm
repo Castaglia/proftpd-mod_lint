@@ -4,6 +4,7 @@ use lib qw(t/lib);
 use base qw(ProFTPD::TestSuite::Child);
 use strict;
 
+use Carp;
 use File::Path qw(mkpath);
 use File::Spec;
 use IO::Handle;
@@ -16,7 +17,7 @@ $| = 1;
 my $order = 0;
 
 my $TESTS = {
-  lint_off => {
+  lint_configfile => {
     order => ++$order,
     test_class => [qw(forking)],
   },
@@ -52,12 +53,52 @@ sub create_test_dir {
   }
 }
 
+sub server_test_config {
+  my $config_file = shift;
+  my $proftpd_bin = ProFTPD::TestSuite::Utils::get_proftpd_bin();
+
+  my $quiet = '-q';
+  if ($ENV{TEST_VERBOSE}) {
+    $quiet = '';
+  }
+
+  my $cmd = "$proftpd_bin $quiet -t -c $config_file";
+
+  if ($ENV{TEST_VERBOSE}) {
+    $cmd .= ' -d10';
+  }
+
+  # Any testing errors will be written to stderr, but we capture stdout.
+  $cmd .= ' 2>&1';
+
+  if ($ENV{TEST_VERBOSE}) {
+    print STDERR "Testing config using: $cmd\n";
+  }
+
+  my @output = `$cmd`;
+
+  foreach my $line (@output) {
+    chomp($line);
+
+    if ($ENV{TEST_VERBOSE}) {
+      print STDERR "# $line\n";
+    }
+
+    if ($line =~ /fatal/) {
+      $line =~ s/^.*?fatal/fatal/;
+      croak($line);
+    }
+  }
+}
+
 # Test cases
 
-sub lint_off {
+sub lint_configfile {
   my $self = shift;
   my $tmpdir = $self->{tmpdir};
   my $setup = test_setup($tmpdir, 'lint');
+
+  my $lint_config_file = File::Spec->rel2abs("$tmpdir/generated.conf");
 
   my $config = {
     PidFile => $setup->{pid_file},
@@ -78,7 +119,7 @@ sub lint_off {
       },
 
       'mod_lint.c' => {
-        LintEngine => 'off',
+        LintConfigFile => $lint_config_file,
       },
     },
   };
@@ -86,48 +127,52 @@ sub lint_off {
   my ($port, $config_user, $config_group) = config_write($setup->{config_file},
     $config);
 
-  # Open pipes, for use between the parent and child processes.  Specifically,
-  # the child will indicate when it's done with its test by writing a message
-  # to the parent.
-  my ($rfh, $wfh);
-  unless (pipe($rfh, $wfh)) {
-    die("Can't open pipe: $!");
-  }
+  server_start($setup->{config_file}, $setup->{pid_file});
+  server_stop($setup->{pid_file});
 
   my $ex;
 
-  # Fork child
-  $self->handle_sigchld();
-  defined(my $pid = fork()) or die("Can't fork: $!");
-  if ($pid) {
-    eval {
-      # Allow the server to start up
-      sleep(1);
+  eval {
+    if (open(my $fh, "< $lint_config_file")) {
+      while (my $line = <$fh>) {
+        chomp($line);
 
-      my $client = ProFTPD::TestSuite::FTP->new('127.0.0.1', $port);
-      $client->login($setup->{user}, $setup->{passwd});
-      $client->quit();
-    };
-    if ($@) {
-      $ex = $@;
+        if ($ENV{TEST_VERBOSE}) {
+          print STDERR "# $line\n";
+        }
+      }
+
+      close($fh);
+
+      # The real test: will ProFTPD read what we just wrote?
+      server_test_config($lint_config_file);
+
+    } else {
+      die("Can't read $lint_config_file: $!");
     }
 
-    $wfh->print("done\n");
-    $wfh->flush();
+    if (open(my $fh, "< $setup->{log_file}")) {
+      my $no_matching = 0;
 
-  } else {
-    eval { server_wait($setup->{config_file}, $rfh) };
-    if ($@) {
-      warn($@);
-      exit 1;
+      while (my $line = <$fh>) {
+        if ($line =~ /found no matching parsed line for/) {
+          $no_matching = 1;
+          last;
+        }
+      }
+
+      close($fh);
+
+      $self->assert($no_matching == 0,
+        test_msg("Failed to properly reconstruct full config due to unknown config_rec name"));
+
+    } else {
+      die("Can't read $setup->{log_file}: $!");
     }
-
-    exit 0;
+  };
+  if ($@) {
+    $ex = $@;
   }
-
-  # Stop server
-  server_stop($setup->{pid_file});
-  $self->assert_child_ok($pid);
 
   test_cleanup($setup->{log_file}, $ex);
 }
