@@ -22,6 +22,11 @@ my $TESTS = {
     test_class => [qw(forking)],
   },
 
+  lint_restart => {
+    order => ++$order,
+    test_class => [qw(forking)],
+  },
+
 };
 
 sub new {
@@ -128,6 +133,84 @@ sub lint_configfile {
     $config);
 
   server_start($setup->{config_file}, $setup->{pid_file});
+  server_stop($setup->{pid_file});
+
+  my $ex;
+
+  eval {
+    if (open(my $fh, "< $lint_config_file")) {
+      while (my $line = <$fh>) {
+        chomp($line);
+
+        if ($ENV{TEST_VERBOSE}) {
+          print STDERR "# $line\n";
+        }
+      }
+
+      close($fh);
+
+      # The real test: will ProFTPD read what we just wrote?
+      server_test_config($lint_config_file);
+
+    } else {
+      die("Can't read $lint_config_file: $!");
+    }
+
+    if (open(my $fh, "< $setup->{log_file}")) {
+      my $no_matching = 0;
+
+      while (my $line = <$fh>) {
+        if ($line =~ /found no matching parsed line for/) {
+          $no_matching = 1;
+          last;
+        }
+      }
+
+      close($fh);
+
+      $self->assert($no_matching == 0,
+        test_msg("Failed to properly reconstruct full config due to unknown config_rec name"));
+
+    } else {
+      die("Can't read $setup->{log_file}: $!");
+    }
+  };
+  if ($@) {
+    $ex = $@;
+  }
+
+  test_cleanup($setup->{log_file}, $ex);
+}
+
+sub lint_restart {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+  my $setup = test_setup($tmpdir, 'lint');
+
+  my $lint_config_file = File::Spec->rel2abs("$tmpdir/generated.conf");
+
+  my $config = {
+    PidFile => $setup->{pid_file},
+    ScoreboardFile => $setup->{scoreboard_file},
+    SystemLog => $setup->{log_file},
+    TraceLog => $setup->{log_file},
+    Trace => 'lint:20',
+
+    AuthUserFile => $setup->{auth_user_file},
+    AuthGroupFile => $setup->{auth_group_file},
+
+    IfModules => {
+      'mod_lint.c' => {
+        LintConfigFile => $lint_config_file,
+      },
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($setup->{config_file},
+    $config);
+
+  server_start($setup->{config_file}, $setup->{pid_file});
+  server_restart($setup->{pid_file});
   server_stop($setup->{pid_file});
 
   my $ex;
