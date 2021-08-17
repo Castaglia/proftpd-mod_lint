@@ -27,6 +27,11 @@ my $TESTS = {
     test_class => [qw(forking)],
   },
 
+  lint_dso => {
+    order => ++$order,
+    test_class => [qw(feature_dso forking)],
+  },
+
 };
 
 sub new {
@@ -130,7 +135,7 @@ sub assert_lint_config_ok {
       chomp($line);
 
       if ($ENV{TEST_VERBOSE}) {
-        print STDERR "# $line\n";
+        print STDERR "$line\n";
       }
     }
 
@@ -229,6 +234,82 @@ sub lint_restart {
   my $ex;
 
   eval { assert_lint_config_ok($setup->{log_file}, $lint_config_file) };
+  if ($@) {
+    $ex = $@;
+  }
+
+  test_cleanup($setup->{log_file}, $ex);
+}
+
+sub lint_dso {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+  my $setup = test_setup($tmpdir, 'lint');
+
+  my $lint_config_file = File::Spec->rel2abs("$tmpdir/generated.conf");
+  my $dso_path = File::Spec->rel2abs("$tmpdir/libexec");
+  mkpath($dso_path);
+
+  my $config = {
+    PidFile => $setup->{pid_file},
+    ScoreboardFile => $setup->{scoreboard_file},
+    SystemLog => $setup->{log_file},
+    TraceLog => $setup->{log_file},
+    Trace => 'lint:20',
+
+    AuthUserFile => $setup->{auth_user_file},
+    AuthGroupFile => $setup->{auth_group_file},
+
+    AllowOverwrite => 'on',
+    AllowStoreRestart => 'on',
+
+    IfModules => {
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+
+      'mod_dso.c' => {
+        ModulePath => $dso_path,
+      },
+
+      'mod_lint.c' => {
+        LintConfigFile => $lint_config_file,
+      },
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($setup->{config_file},
+    $config);
+
+  server_start($setup->{config_file}, $setup->{pid_file});
+  server_stop($setup->{pid_file});
+
+  my $ex;
+
+  eval {
+    assert_lint_config_ok($setup->{log_file}, $lint_config_file);
+
+    if (open(my $fh, "< $lint_config_file")) {
+      my $ok = 0;
+
+      while (my $line = <$fh>) {
+        chomp($line);
+
+        if ($line =~ /^ModulePath /) {
+          $ok = 1;
+          last;
+        }
+      }
+
+      close($fh);
+
+      $self->assert($ok,
+        test_msg("Did not see expected ModulePath directive in generated config"));
+
+    } else {
+      die("Can't read $lint_config_file: $!");
+    }
+  };
   if ($@) {
     $ex = $@;
   }

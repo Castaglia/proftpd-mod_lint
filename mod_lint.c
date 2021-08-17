@@ -126,7 +126,7 @@ static int lint_write_header(pool *p, pr_fh_t *fh) {
   return res;
 }
 
-#if defined(PR_SHARED_MODULE)
+#if defined(PR_USE_DSO)
 static int is_static_module(module *m) {
   register unsigned int i;
 
@@ -141,7 +141,7 @@ static int is_static_module(module *m) {
 
   return FALSE;
 }
-#endif /* PR_SHARED_MODULE */
+#endif /* PR_USE_DSO */
 
 static int lint_add_config_rec(pool *p, array_header *buffered_lines,
     config_rec *c, const char *indent) {
@@ -276,16 +276,25 @@ static int lint_write_defines(pool *p, pr_fh_t *fh) {
 }
 
 static int lint_write_modules(pool *p, pr_fh_t *fh) {
-#if defined(PR_SHARED_MODULE)
-  int res;
+#if defined(PR_USE_DSO)
+  int res, have_shared_modules = FALSE;
   module *m;
+  pool *ctx_pool;
+  array_header *buffered_lines = NULL;
+  struct lint_parsed_line *parsed_line;
 
-  /* XXX TODO Scan recorded parsed_lines for ModulePath et al */
-
-  res = lint_text_write_fmt(fh, "%s", "\n# Modules\n\n<IfModule mod_dso.c>\n");
-  if (res < 0) {
-    return -1;
+  parsed_line = lint_find_parsed_line("ModulePath");
+  if (parsed_line != NULL) {
+    res = lint_text_write_fmt(fh, "\n# Modules\n\n%s\n", parsed_line->text);
+    if (res < 0) {
+      return -1;
+    }
   }
+
+  ctx_pool = make_sub_pool(p);
+  pr_pool_tag(ctx_pool, "Lint server context pool");
+  buffered_lines = make_array(ctx_pool, 10,
+    sizeof(struct lint_buffered_line *));
 
   for (m = loaded_modules; m; m = m->next) {
     pr_signals_handle();
@@ -295,17 +304,36 @@ static int lint_write_modules(pool *p, pr_fh_t *fh) {
       continue;
     }
 
-    res = lint_text_write_fmt(fh, "  LoadModule mod_%s.c\n", m->name);
+    res = lint_text_add_fmt(ctx_pool, buffered_lines,
+      "  LoadModule mod_%s.c\n", m->name);
+    if (res < 0) {
+      return -1;
+    }
+
+    have_shared_modules = TRUE;
+  }
+
+  if (have_shared_modules == TRUE) {
+    res = lint_text_write_fmt(fh, "\n%s<IfModule mod_dso.c>\n",
+      parsed_line == NULL ? "# Modules\n\n" : "");
+    if (res < 0) {
+      return -1;
+    }
+
+    res = lint_text_write_buffered_lines(fh, buffered_lines);
+    if (res < 0) {
+      destroy_pool(ctx_pool);
+      return -1;
+    }
+
+    res = lint_text_write_fmt(fh, "%s", "<IfModule>\n");
     if (res < 0) {
       return -1;
     }
   }
 
-  res = lint_text_write_fmt(fh, "%s", "<IfModule>\n");
-  if (res < 0) {
-    return -1;
-  }
-#endif /* PR_SHARED_MODULE */
+  destroy_pool(ctx_pool);
+#endif /* PR_USE_DSO */
 
   return 0;
 }
