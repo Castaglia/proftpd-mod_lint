@@ -3,7 +3,7 @@ Makefile
 config.log
 config.status
 autom4te.cache
-mod_prometheus.h
+mod_lint.h
 tests.log
 t/api-tests
 t/api-tests.log
