@@ -34,24 +34,20 @@ jobs:
       - name: Checkout module source code
         uses: actions/checkout@v2
         with:
-          path: proftpd-mod_lint
+          path: proftpd/contrib/mod_lint
 
       - name: Whitespace check
         if: ${{ matrix.container == 'ubuntu:18.04' }}
         run: |
           apt-get update -qq
           apt-get install -y git
-          cd proftpd-mod_lint
+          cd proftpd/contrib/mod_lint
           if [[ -n $(git diff --check HEAD^) ]]; then
             echo "You must remove whitespace before submitting a pull request"
             echo ""
             git diff --check HEAD^
             exit 1
           fi
-
-      - name: Prepare module source code
-        run: |
-          cp proftpd-mod_lint/mod_lint.c proftpd/contrib/
 
       - name: Install Alpine packages
         if: ${{ matrix.container == 'alpine:3.14' }}
@@ -127,6 +123,15 @@ jobs:
           ./configure LIBS="-lm -lsubunit -lrt -pthread" --enable-devel=coverage --enable-tests --with-modules=mod_lint
           make
 
+      - name: Run unit tests
+        env:
+          CC: ${{ matrix.compiler }}
+        # Note: Skip the unit tests on Alpine
+        if: ${{ matrix.container != 'alpine:3.14' }}
+        run: |
+          cd proftpd/contrib/mod_lint
+          make TEST_VERBOSE=1 check
+
       - name: Install as static module
         run: |
           cd proftpd
@@ -138,7 +143,7 @@ jobs:
           PROFTPD_TEST_BIN: /usr/local/sbin/proftpd
           PROFTPD_TEST_DIR: ${{ github.workspace }}/proftpd
         run: |
-          cd proftpd-mod_lint
+          cd proftpd/contrib/mod_lint
           perl tests.pl
 
       - name: Build as shared module
@@ -157,6 +162,5 @@ jobs:
 
       - name: Check HTML docs
         run: |
-          cd proftpd-mod_lint
-          echo "Processing mod_lint.html"
-          tidy -errors -omit -q mod_lint.html | exit 0
+          cd proftpd/contrib/mod_lint
+          for f in $(/bin/ls *.html); do echo "Processing $f"; tidy -errors -omit -q $f; done || exit 0
