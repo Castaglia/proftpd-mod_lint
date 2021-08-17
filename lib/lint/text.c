@@ -151,13 +151,13 @@ static int buffered_linecmp(const void *a, const void *b) {
 int lint_text_write_buffered_lines(pr_fh_t *fh, array_header *buffered_lines) {
   register unsigned int i;
 
-  if (buffered_lines == NULL) {
-    return 0;
-  }
-
   if (fh == NULL) {
     errno = EINVAL;
     return -1;
+  }
+
+  if (buffered_lines == NULL) {
+    return 0;
   }
 
   /* Sort the lines first */

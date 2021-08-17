@@ -53,26 +53,136 @@ static void tear_down(void) {
 }
 
 START_TEST (text_add_fmt_test) {
+  int res;
+  array_header *list;
+
+  mark_point();
+  res = lint_text_add_fmt(NULL, NULL, NULL);
+  fail_unless(res < 0, "Failed to handle null pool");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  res = lint_text_add_fmt(p, NULL, NULL);
+  fail_unless(res < 0, "Failed to handle null list");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  list = make_array(p, 0, sizeof(char *));
+  res = lint_text_add_fmt(p, list, NULL);
+  fail_unless(res < 0, "Failed to handle null fmt");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
 }
 END_TEST
 
 START_TEST (text_add_msg_test) {
+  int res;
+  array_header *list;
+  va_list msg;
+
+  mark_point();
+  res = lint_text_add_msg(NULL, NULL, NULL, msg);
+  fail_unless(res < 0, "Failed to handle null pool");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  res = lint_text_add_msg(p, NULL, NULL, msg);
+  fail_unless(res < 0, "Failed to handle null list");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  list = make_array(p, 0, sizeof(char *));
+  res = lint_text_add_msg(p, list, NULL, msg);
+  fail_unless(res < 0, "Failed to handle null fmt");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
 }
 END_TEST
 
 START_TEST (text_write_fmt_test) {
+  int res;
+  pr_fh_t *fh;
+
+  mark_point();
+  res = lint_text_write_fmt(NULL, NULL);
+  fail_unless(res < 0, "Failed to handle null fh");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  /* We don't need a real pr_fh_t for this test. */
+  fh = (pr_fh_t *) 6;
+  res = lint_text_write_fmt(6, NULL);
+  fail_unless(res < 0, "Failed to handle null fmt");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
 }
 END_TEST
 
 START_TEST (text_write_msg_test) {
+  int res;
+  pr_fh_t *fh;
+  va_list msg;
+
+  mark_point();
+  res = lint_text_write_msg(NULL, NULL, msg);
+  fail_unless(res < 0, "Failed to handle null fh");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  /* We don't need a real pr_fh_t for this test. */
+  fh = (pr_fh_t *) 7;
+  res = lint_text_write_msg(fh, NULL, msg);
+  fail_unless(res < 0, "Failed to handle null text");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
 }
 END_TEST
 
 START_TEST (text_write_text_test) {
+  int res;
+  pr_fh_t *fh;
+
+  mark_point();
+  res = lint_text_write_text(NULL, NULL, 0);
+  fail_unless(res < 0, "Failed to handle null fh");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  /* We don't need a real pr_fh_t for this test. */
+  fh = (pr_fh_t *) 8;
+  res = lint_text_write_text(fh, NULL, 0);
+  fail_unless(res < 0, "Failed to handle null text");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  res = lint_text_write_text(fh, "foobar", 0);
+  fail_unless(res == 0, "Failed to handle zero text len: %s", strerror(errno));
 }
 END_TEST
 
 START_TEST (text_write_buffered_lines_test) {
+  int res;
+  pr_fh_t *fh;
+
+  mark_point();
+  res = lint_text_write_buffered_lines(NULL, NULL);
+  fail_unless(res < 0, "Failed to handle null fh");
+  fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
+    strerror(errno), errno);
+
+  mark_point();
+  /* We don't need a real pr_fh_t for this test. */
+  fh = (pr_fh_t *) 9;
+  res = lint_text_write_buffered_lines(fh, NULL);
+  fail_unless(res == 0, "Failed to handle null list: %s", strerror(errno));
 }
 END_TEST
 
