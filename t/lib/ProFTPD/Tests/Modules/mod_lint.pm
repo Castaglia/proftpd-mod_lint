@@ -96,6 +96,56 @@ sub server_test_config {
   }
 }
 
+sub assert_lint_config_ok {
+  my $log_file = shift;
+  my $lint_config_file = shift;
+
+  if (open(my $fh, "< $log_file")) {
+    my $failed_emitting = 0;
+    my $no_matching = 0;
+
+    while (my $line = <$fh>) {
+      if ($line =~ /failed to emit config file/) {
+        $failed_emitting = 1;
+        last;
+      }
+
+      if ($line =~ /found no matching parsed line for/) {
+        $no_matching = 1;
+        last;
+      }
+    }
+
+    close($fh);
+
+    croak("Failed to generate lint config file") unless $failed_emitting == 0;
+    croak("Failed to properly reconstruct full config due to unknown config_rec name") unless $no_matching == 0;
+
+  } else {
+    croak("Can't read $log_file: $!");
+  }
+
+  if (open(my $fh, "< $lint_config_file")) {
+    while (my $line = <$fh>) {
+      chomp($line);
+
+      if ($ENV{TEST_VERBOSE}) {
+        print STDERR "# $line\n";
+      }
+    }
+
+    close($fh);
+
+    # The real test: will ProFTPD read what we just wrote?
+    server_test_config($lint_config_file);
+
+  } else {
+    croak("Can't read $lint_config_file: $!");
+  }
+
+  1;
+}
+
 # Test cases
 
 sub lint_configfile {
@@ -137,44 +187,7 @@ sub lint_configfile {
 
   my $ex;
 
-  eval {
-    if (open(my $fh, "< $lint_config_file")) {
-      while (my $line = <$fh>) {
-        chomp($line);
-
-        if ($ENV{TEST_VERBOSE}) {
-          print STDERR "# $line\n";
-        }
-      }
-
-      close($fh);
-
-      # The real test: will ProFTPD read what we just wrote?
-      server_test_config($lint_config_file);
-
-    } else {
-      die("Can't read $lint_config_file: $!");
-    }
-
-    if (open(my $fh, "< $setup->{log_file}")) {
-      my $no_matching = 0;
-
-      while (my $line = <$fh>) {
-        if ($line =~ /found no matching parsed line for/) {
-          $no_matching = 1;
-          last;
-        }
-      }
-
-      close($fh);
-
-      $self->assert($no_matching == 0,
-        test_msg("Failed to properly reconstruct full config due to unknown config_rec name"));
-
-    } else {
-      die("Can't read $setup->{log_file}: $!");
-    }
-  };
+  eval { assert_lint_config_ok($setup->{log_file}, $lint_config_file) };
   if ($@) {
     $ex = $@;
   }
@@ -215,44 +228,7 @@ sub lint_restart {
 
   my $ex;
 
-  eval {
-    if (open(my $fh, "< $lint_config_file")) {
-      while (my $line = <$fh>) {
-        chomp($line);
-
-        if ($ENV{TEST_VERBOSE}) {
-          print STDERR "# $line\n";
-        }
-      }
-
-      close($fh);
-
-      # The real test: will ProFTPD read what we just wrote?
-      server_test_config($lint_config_file);
-
-    } else {
-      die("Can't read $lint_config_file: $!");
-    }
-
-    if (open(my $fh, "< $setup->{log_file}")) {
-      my $no_matching = 0;
-
-      while (my $line = <$fh>) {
-        if ($line =~ /found no matching parsed line for/) {
-          $no_matching = 1;
-          last;
-        }
-      }
-
-      close($fh);
-
-      $self->assert($no_matching == 0,
-        test_msg("Failed to properly reconstruct full config due to unknown config_rec name"));
-
-    } else {
-      die("Can't read $setup->{log_file}: $!");
-    }
-  };
+  eval { assert_lint_config_ok($setup->{log_file}, $lint_config_file) };
   if ($@) {
     $ex = $@;
   }

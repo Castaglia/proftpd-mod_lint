@@ -61,6 +61,7 @@ struct lint_parsed_line {
   struct lint_parsed_line *next, *prev;
   const char *directive;
   const char *text;
+  module *handling_module;
   const char *source_file;
   unsigned int source_lineno;
 };
@@ -72,19 +73,21 @@ static const char *trace_channel = "lint";
 static int lint_add_config_set(pool *p, array_header *bl, xaset_t *set,
   char *indent);
 
-/* XXX TODO:
- *
- *  In order of parsed lines (thus track this), AND given merged config
- *  tree, emit full config file.
- *
- *  Watch for modules (like mod_sql), whose config_recs don't necessarily
- *  match the text name; some register multiple config_recs!
- *
- *  need to find which parsed_line entries don't have matching config_recs!
- *  need to find which config_recs don't have matching parsed_line entries!
- *
- * What about Defines?
- */
+static module *lint_find_handling_module(const char *directive) {
+  conftable *conftab = NULL;
+  int idx = -1;
+  unsigned int hash = 0;
+
+  conftab = pr_stash_get_symbol2(PR_SYM_CONF, directive, NULL, &idx, &hash);
+  if (conftab != NULL) {
+    return conftab->m;
+  }
+
+  pr_trace_msg(trace_channel, 2, "found no module to handle '%s' directive",
+    directive);
+  errno = ENOENT;
+  return NULL;
+}
 
 static struct lint_parsed_line *lint_find_parsed_line(const char *directive) {
   struct lint_parsed_line *parsed_line;
@@ -383,6 +386,14 @@ static int lint_add_server_rec(pool *p, array_header *buffered_lines,
     return -1;
   }
 
+  return 0;
+}
+
+static int lint_write_defines(pool *p, pr_fh_t *fh) {
+  /* XXX TODO: Scan the parsed lines for ALL Define lines! */
+  /* XXX TODO: write lint_find_all_parsed_lines(p, directive), returns
+   *  array_header of all results.
+   */
   return 0;
 }
 
@@ -739,6 +750,14 @@ static int lint_write_config(pool *p, const char *path) {
     return -1;
   }
 
+  if (lint_write_defines(p, fh) < 0) {
+    xerrno = errno;
+
+    (void) pr_fsio_close(fh);
+    errno = xerrno;
+    return -1;
+  }
+
   if (lint_write_modules(p, fh) < 0) {
     xerrno = errno;
 
@@ -841,6 +860,7 @@ static void lint_mod_unload_ev(const void *event_data, void *user_data) {
 
   destroy_pool(lint_pool);
   lint_pool = NULL;
+  parsed_lines = NULL;
 }
 #endif /* PR_SHARED_MODULE */
 
@@ -848,10 +868,21 @@ static void lint_parsed_line_ev(const void *event_data, void *user_data) {
   const pr_parsed_line_t *parsed_data;
   struct lint_parsed_line *parsed_line;
   const char *text;
+  module *handling_module;
 
   parsed_data = event_data;
   pr_trace_msg(trace_channel, 7, "%s # %s:%u", parsed_data->text,
     parsed_data->source_file, parsed_data->source_lineno);
+
+  /* This may be a misspelled/unknown directive; make sure we handle it
+   * accordingly.
+   */
+  handling_module = lint_find_handling_module(parsed_data->cmd->argv[0]);
+  if (handling_module == NULL) {
+    pr_trace_msg(trace_channel, 9, "ignoring unknown directive '%s'",
+      (char *) parsed_data->cmd->argv[0]);
+    return;
+  }
 
   if (lint_pool == NULL) {
     lint_pool = make_sub_pool(permanent_pool);
@@ -868,6 +899,7 @@ static void lint_parsed_line_ev(const void *event_data, void *user_data) {
 
   parsed_line = pcalloc(lint_pool, sizeof(struct lint_parsed_line));
   parsed_line->directive = pstrdup(lint_pool, parsed_data->cmd->argv[0]);
+  parsed_line->handling_module = handling_module;
 
   text = parsed_data->text;
 
