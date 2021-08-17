@@ -116,7 +116,7 @@ START_TEST (text_write_fmt_test) {
   mark_point();
   /* We don't need a real pr_fh_t for this test. */
   fh = (pr_fh_t *) 6;
-  res = lint_text_write_fmt(6, NULL);
+  res = lint_text_write_fmt(fh, NULL);
   fail_unless(res < 0, "Failed to handle null fmt");
   fail_unless(errno == EINVAL, "Expected EINVAL (%d), got %s (%d)", EINVAL,
     strerror(errno), errno);

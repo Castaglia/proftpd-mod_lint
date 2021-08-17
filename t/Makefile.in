@@ -39,12 +39,16 @@ TEST_API_DEPS=\
   $(top_srcdir)/src/trace.o \
   $(top_srcdir)/src/support.o \
   $(top_srcdir)/src/error.o \
-  $(module_srcdir)/lib/lint/text.o
+  $(module_srcdir)/lib/lint/text.o \
+  $(module_srcdir)/lib/lint/cop.o \
+  $(module_srcdir)/lib/lint/cop/default.o \
+  $(module_srcdir)/lib/lint/cop/core.o
 
 TEST_API_LIBS=-lcheck -lm @MODULE_LIBS@
 
 TEST_API_OBJS=\
   api/text.o \
+  api/cop.o \
   api/stubs.o \
   api/tests.o
 

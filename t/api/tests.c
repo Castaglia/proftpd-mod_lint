@@ -31,6 +31,7 @@ struct testsuite_info {
 
 static struct testsuite_info suites[] = {
   { "text",		tests_get_text_suite },
+  { "cop",		tests_get_cop_suite },
 
   { NULL, NULL }
 };
