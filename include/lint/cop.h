@@ -1,6 +1,6 @@
 /*
- * ProFTPD - mod_lint API testsuite
- * Copyright (c) 2021 TJ Saunders <tj@castaglia.org>
+ * ProFTPD - mod_lint cop API
+ * Copyright (c) 2021 TJ Saunders
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,27 +22,23 @@
  * source distribution.
  */
 
-/* Testsuite management */
-
-#ifndef MOD_LINT_TESTS_H
-#define MOD_LINT_TESTS_H
+#ifndef MOD_LINT_COP_H
+#define MOD_LINT_COP_H
 
 #include "mod_lint.h"
 
-#ifdef HAVE_CHECK_H
-# include <check.h>
-#else
-# error "Missing Check installation; necessary for ProFTPD testsuite"
-#endif
+struct lint_cop {
+  const char *name;
+  module *m;
 
-int tests_mkpath(pool *p, const char *path);
-int tests_rmpath(pool *p, const char *path);
+  const char *(*get_directive)(pool *p, config_rec *c);
+};
 
-Suite *tests_get_cop_suite(void);
-Suite *tests_get_text_suite(void);
+const struct lint_cop *lint_cop_get_config_cop(config_rec *c);
+const struct lint_cop *lint_cop_get_module_cop(module *m);
 
-extern volatile unsigned int recvd_signal_flags;
-extern pid_t mpid;
-extern server_rec *main_server;
+/* Provides the directive name for a config_rec. */
+const char *lint_cop_get_directive(const struct lint_cop *cop, pool *p,
+  config_rec *c);
 
-#endif /* MOD_LINT_TESTS_H */
+#endif /* MOD_LINT_COP_H */

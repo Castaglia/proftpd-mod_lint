@@ -13,10 +13,16 @@ VPATH=@srcdir@
 MODULE_LIBS=@MODULE_LIBS@
 MODULE_NAME=mod_lint
 MODULE_OBJS=mod_lint.o \
-  lib/lint/text.o
+  lib/lint/text.o \
+  lib/lint/cop.o \
+  lib/lint/cop/default.o \
+  lib/lint/cop/core.o \
 
 SHARED_MODULE_OBJS=mod_lint.lo \
-  lib/lint/text.lo
+  lib/lint/text.lo \
+  lib/lint/cop.lo \
+  lib/lint/cop/default.lo \
+  lib/lint/cop/core.lo
 
 # Necessary redefinitions
 INCLUDES=-I. -I./include -I../.. -I../../include @INCLUDES@

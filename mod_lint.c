@@ -27,6 +27,7 @@
 
 #include "mod_lint.h"
 #include "lint/text.h"
+#include "lint/cop.h"
 
 extern module *static_modules[];
 extern module *loaded_modules;
@@ -160,28 +161,24 @@ static int lint_add_config_rec(pool *p, array_header *buffered_lines,
    * Start with CONF_PARAM.
    */
 
+  /* To look up the cop for this config, we need the module.  Chicken, egg.
+   * config_rec->server?  The related parsed_line has the module -- but
+   * we need to know what directive to search for, to find that parsed_line.
+   */
+
   switch (c->config_type) {
     /* TODO: Break these out into their own separate, specialized write
      * functions.
      */
     case CONF_PARAM: {
+      const struct lint_cop *cop;
       const char *directive;
 
-      directive = c->name;
+      cop = lint_cop_get_config_cop(c);
 
-      /* There are some directives whose config_rec names don't quite match;
-       * handle them, too.
-       */
-      if (strcmp(c->name, "GroupID") == 0 ||
-          strcmp(c->name, "UserID") == 0) {
+      directive = lint_cop_get_directive(cop, p, c);
+      if (directive == NULL) {
         return 0;
-      }
-
-      if (strcmp(c->name, "GroupName") == 0) {
-        directive = "Group";
-
-      } else if (strcmp(c->name, "UserName") == 0) {
-        directive = "User";
       }
 
       parsed_line = lint_find_parsed_line(directive);
