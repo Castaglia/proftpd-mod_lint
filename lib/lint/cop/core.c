@@ -26,7 +26,8 @@
 #include "lint/cop.h"
 
 static const char *get_directive(pool *p, config_rec *c) {
-  if (strcmp(c->name, "GroupID") == 0 ||
+  if (strcmp(c->name, "DirUmask") == 0 ||
+      strcmp(c->name, "GroupID") == 0 ||
       strcmp(c->name, "UserID") == 0) {
     errno = ENOENT;
     return NULL;

@@ -77,16 +77,23 @@ static module *lint_find_handling_module(const char *directive) {
   return NULL;
 }
 
-static struct lint_parsed_line *lint_find_parsed_line(const char *directive) {
+static struct lint_parsed_line *lint_find_parsed_line(const char *directive,
+    struct lint_parsed_line **next) {
   struct lint_parsed_line *parsed_line;
 
   if (parsed_lines == NULL) {
     return NULL;
   }
 
-  for (parsed_line = (struct lint_parsed_line *) parsed_lines->xas_list;
-       parsed_line != NULL;
-       parsed_line = parsed_line->next) {
+  if (next != NULL &&
+      *next != NULL) {
+    parsed_line = *next;
+
+  } else {
+    parsed_line = (struct lint_parsed_line *) parsed_lines->xas_list;
+  }
+
+  for (; parsed_line != NULL; parsed_line = parsed_line->next) {
     if (strcmp(parsed_line->directive, directive) == 0) {
       return parsed_line;
     }
@@ -181,7 +188,7 @@ static int lint_add_config_rec(pool *p, array_header *buffered_lines,
         return 0;
       }
 
-      parsed_line = lint_find_parsed_line(directive);
+      parsed_line = lint_find_parsed_line(directive, NULL);
       if (parsed_line != NULL) {
         res = lint_text_add_fmt(p, buffered_lines, "%s%s\n", indent,
           parsed_line->text);
@@ -280,7 +287,7 @@ static int lint_write_modules(pool *p, pr_fh_t *fh) {
   array_header *buffered_lines = NULL;
   struct lint_parsed_line *parsed_line;
 
-  parsed_line = lint_find_parsed_line("ModulePath");
+  parsed_line = lint_find_parsed_line("ModulePath", NULL);
   if (parsed_line != NULL) {
     res = lint_text_write_fmt(fh, "\n# Modules\n\n%s\n", parsed_line->text);
     if (res < 0) {
@@ -362,7 +369,7 @@ static int lint_write_server_config(pool *p, pr_fh_t *fh) {
   }
 
   /* MaxConnectionRate changes variables that are scoped to mod_core only. */
-  parsed_line = lint_find_parsed_line("MaxConnectionRate");
+  parsed_line = lint_find_parsed_line("MaxConnectionRate", NULL);
   if (parsed_line != NULL) {
     res = lint_text_add_fmt(ctx_pool, buffered_lines, "%s\n",
       parsed_line->text);
@@ -441,7 +448,7 @@ static int lint_write_server_config(pool *p, pr_fh_t *fh) {
     return -1;
   }
 
-  parsed_line = lint_find_parsed_line("SocketOptions");
+  parsed_line = lint_find_parsed_line("SocketOptions", NULL);
   if (parsed_line != NULL) {
     res = lint_text_add_fmt(ctx_pool, buffered_lines, "%s\n",
       parsed_line->text);
@@ -458,7 +465,7 @@ static int lint_write_server_config(pool *p, pr_fh_t *fh) {
     return -1;
   }
 
-  parsed_line = lint_find_parsed_line("TraceLog");
+  parsed_line = lint_find_parsed_line("TraceLog", NULL);
   if (parsed_line != NULL) {
     res = lint_text_add_fmt(ctx_pool, buffered_lines, "%s\n",
       parsed_line->text);
@@ -468,7 +475,7 @@ static int lint_write_server_config(pool *p, pr_fh_t *fh) {
     }
   }
 
-  parsed_line = lint_find_parsed_line("Trace");
+  parsed_line = lint_find_parsed_line("Trace", NULL);
   if (parsed_line != NULL) {
     res = lint_text_add_fmt(ctx_pool, buffered_lines, "%s\n",
       parsed_line->text);
@@ -478,7 +485,7 @@ static int lint_write_server_config(pool *p, pr_fh_t *fh) {
     }
   }
 
-  parsed_line = lint_find_parsed_line("TraceOptions");
+  parsed_line = lint_find_parsed_line("TraceOptions", NULL);
   if (parsed_line != NULL) {
     res = lint_text_add_fmt(ctx_pool, buffered_lines, "%s\n",
       parsed_line->text);
