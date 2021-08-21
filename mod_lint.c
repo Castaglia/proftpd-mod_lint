@@ -52,14 +52,21 @@ struct lint_parsed_line {
   module *handling_module;
   const char *source_file;
   unsigned int source_lineno;
+  array_header *associated_configs;
 };
 
+static array_header *associated_configs = NULL;
 static xaset_t *parsed_lines = NULL;
 
 static const char *trace_channel = "lint";
 
 static int lint_add_config_set(pool *p, array_header *bl, xaset_t *set,
   char *indent);
+
+static void lint_pool_cleanup(void *user_data) {
+  parsed_lines = NULL;
+  associated_configs = NULL;
+}
 
 static module *lint_find_handling_module(const char *directive) {
   conftable *conftab = NULL;
@@ -77,17 +84,26 @@ static module *lint_find_handling_module(const char *directive) {
   return NULL;
 }
 
+/* Note: To iterate through all parsed lines for the same directive, use:
+ *
+ *   struct lint_parsed_line *parsed_line;
+ *
+ *   parsed_line = lint_find_parsed_line("Foo", NULL);
+ *   while (parsed_line != NULL) {
+ *     parsed_line = lint_find_parsed_line(parsed_line->directive,
+ *       parsed_line->next);
+ *   }
+ */
 static struct lint_parsed_line *lint_find_parsed_line(const char *directive,
-    struct lint_parsed_line **next) {
+    struct lint_parsed_line *next_line) {
   struct lint_parsed_line *parsed_line;
 
   if (parsed_lines == NULL) {
     return NULL;
   }
 
-  if (next != NULL &&
-      *next != NULL) {
-    parsed_line = *next;
+  if (next_line != NULL) {
+    parsed_line = next_line;
 
   } else {
     parsed_line = (struct lint_parsed_line *) parsed_lines->xas_list;
@@ -766,6 +782,23 @@ MODRET set_lintengine(cmd_rec *cmd) {
 /* Event listeners
  */
 
+static void lint_added_config_ev(const void *event_data, void *user_data) {
+  const config_rec *c;
+
+  c = event_data;
+  if (c->name != NULL) {
+    pr_trace_msg(trace_channel, 7, "%s (type %d) config added", c->name,
+      c->config_type);
+
+  } else {
+    pr_trace_msg(trace_channel, 7, "%d-type config added", c->config_type);
+  }
+
+  if (associated_configs != NULL) {
+    *((const config_rec **) push_array(associated_configs)) = c;
+  }
+}
+
 #if defined(PR_SHARED_MODULE)
 static void lint_mod_unload_ev(const void *event_data, void *user_data) {
   if (strcmp((const char *) event_data, "mod_lint.c") != 0) {
@@ -777,7 +810,6 @@ static void lint_mod_unload_ev(const void *event_data, void *user_data) {
 
   destroy_pool(lint_pool);
   lint_pool = NULL;
-  parsed_lines = NULL;
 }
 #endif /* PR_SHARED_MODULE */
 
@@ -804,6 +836,7 @@ static void lint_parsed_line_ev(const void *event_data, void *user_data) {
   if (lint_pool == NULL) {
     lint_pool = make_sub_pool(permanent_pool);
     pr_pool_tag(lint_pool, MOD_LINT_VERSION);
+    register_cleanup2(lint_pool, NULL, lint_pool_cleanup);
   }
 
   /* Keep a list of these text lines, in order of appearance.  First phase
@@ -830,15 +863,63 @@ static void lint_parsed_line_ev(const void *event_data, void *user_data) {
   parsed_line->source_lineno = parsed_data->source_lineno;
 
   xaset_insert_end(parsed_lines, (xasetmember_t *) parsed_line);
+
+  if (associated_configs != NULL) {
+    if (associated_configs->nelts > 0) {
+      struct lint_parsed_line *prev_parsed_line;
+
+      /* Assume that all accumulated configs are associated with the
+       * previous parsed line.
+       */
+      prev_parsed_line = (struct lint_parsed_line *) (((xasetmember_t *) parsed_line)->prev);
+      prev_parsed_line->associated_configs = copy_array(lint_pool,
+        associated_configs);
+      clear_array(associated_configs);
+
+      pr_trace_msg(trace_channel, 9,
+        "added associated configs (%d) to '%s' parsed line",
+        prev_parsed_line->associated_configs->nelts,
+        prev_parsed_line->directive);
+    }
+
+  } else {
+    associated_configs = make_array(lint_pool, 0, sizeof(const config_rec **));
+  }
 }
 
 static void lint_postparse_ev(const void *event_data, void *user_data) {
   int res;
   config_rec *c;
 
+  /* Watch for any dangling configs, associated with the very last line
+   * parsed.
+   */
+  if (associated_configs != NULL &&
+      associated_configs->nelts > 0) {
+    struct lint_parsed_line *parsed_line;
+
+    /* Assume that all accumulated configs are associated with the
+     * last parsed line.
+     */
+
+    parsed_line = (struct lint_parsed_line *) parsed_lines->xas_list;
+    while (parsed_line != NULL &&
+           parsed_line->next != NULL) {
+      parsed_line = parsed_line->next;
+    }
+
+    parsed_line->associated_configs = copy_array(lint_pool, associated_configs);
+    clear_array(associated_configs);
+
+    pr_trace_msg(trace_channel, 9,
+      "added associated configs (%d) to '%s' parsed line",
+      parsed_line->associated_configs->nelts, parsed_line->directive);
+  }
+
   /* At this point in time, we no longer care about parsed lines, as for
    * .ftpaccess files.
    */
+  pr_event_unregister(&lint_module, "core.added-config", NULL);
   pr_event_unregister(&lint_module, "core.parsed-line", NULL);
 
   c = find_config(main_server->conf, CONF_PARAM, "LintEngine", FALSE);
@@ -847,7 +928,6 @@ static void lint_postparse_ev(const void *event_data, void *user_data) {
     if (lint_engine == FALSE) {
       destroy_pool(lint_pool);
       lint_pool = NULL;
-      parsed_lines = NULL;
 
       return;
     }
@@ -863,7 +943,6 @@ static void lint_postparse_ev(const void *event_data, void *user_data) {
       "no LintConfigFile configured, skipping");
     destroy_pool(lint_pool);
     lint_pool = NULL;
-    parsed_lines = NULL;
 
     return;
   }
@@ -879,13 +958,14 @@ static void lint_postparse_ev(const void *event_data, void *user_data) {
    */
   destroy_pool(lint_pool);
   lint_pool = NULL;
-  parsed_lines = NULL;
 }
 
 static void lint_restart_ev(const void *event_data, void *user_data) {
   /* Re-register our interest in parsed line events, now that the
    * (possibly changed) configuration will be re-read.
    */
+  pr_event_register(&lint_module, "core.added-config", lint_added_config_ev,
+    NULL);
   pr_event_register(&lint_module, "core.parsed-line", lint_parsed_line_ev,
     NULL);
   lint_engine = TRUE;
@@ -897,11 +977,14 @@ static void lint_restart_ev(const void *event_data, void *user_data) {
 static int lint_init(void) {
   lint_pool = make_sub_pool(permanent_pool);
   pr_pool_tag(lint_pool, MOD_LINT_VERSION);
+  register_cleanup2(lint_pool, NULL, lint_pool_cleanup);
 
 #if defined(PR_SHARED_MODULE)
   pr_event_register(&lint_module, "core.module-unload", lint_mod_unload_ev,
     NULL);
 #endif /* PR_SHARED_MODULE */
+  pr_event_register(&lint_module, "core.added-config", lint_added_config_ev,
+    NULL);
   pr_event_register(&lint_module, "core.parsed-line", lint_parsed_line_ev,
     NULL);
   pr_event_register(&lint_module, "core.postparse", lint_postparse_ev, NULL);
