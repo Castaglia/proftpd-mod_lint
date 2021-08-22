@@ -11,4 +11,4 @@ Synopsis
 
 The `mod_lint` module for ProFTPD implements [linting](https://en.wikipedia.org/wiki/Lint_(software)) of configurations.
 
-See the [mod_lint.html](https://htmlpreview.github.io/?https://github.com/Castaglia/proftpd-mod_lint/blob/master/mod_auth_policy.html) documentation for more details.
+See the [mod_lint.html](https://htmlpreview.github.io/?https://github.com/Castaglia/proftpd-mod_lint/blob/master/mod_lint.html) documentation for more details.
